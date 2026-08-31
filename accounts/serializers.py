@@ -1,8 +1,42 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 User = get_user_model()
+
+
+class EmailOrUsernameTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """Login with either the username OR the email address.
+
+    SimpleJWT's default validates against `username` only. The Pulse Markets
+    frontend labels the login field "Email", so we resolve the entered value to
+    a user by username or email before issuing tokens.
+    """
+
+    def validate(self, attrs):
+        identifier = attrs.get("username", "")
+        password = attrs.get("password", "")
+
+        user = None
+        if User.objects.filter(email__iexact=identifier).exists():
+            user = User.objects.filter(email__iexact=identifier).first()
+        else:
+            user = User.objects.filter(username=identifier).first()
+
+        if user is None:
+            raise serializers.ValidationError(
+                "No account found with that email or username."
+            )
+        if not user.check_password(password):
+            raise serializers.ValidationError(
+                "Unable to log in with provided credentials."
+            )
+        if not user.is_active:
+            raise serializers.ValidationError("This account is inactive.")
+
+        data = super().validate({"username": user.username, "password": password})
+        return data
 
 
 class UserSerializer(serializers.ModelSerializer):

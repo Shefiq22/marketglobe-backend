@@ -3,10 +3,22 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .serializers import ChangePasswordSerializer, RegisterSerializer, UserSerializer
+from .serializers import (
+    ChangePasswordSerializer,
+    EmailOrUsernameTokenObtainPairSerializer,
+    RegisterSerializer,
+    UserSerializer,
+)
 
 User = get_user_model()
+
+
+class EmailOrUsernameTokenObtainPairView(TokenObtainPairView):
+    """POST /api/auth/login/ — accepts either username or email."""
+
+    serializer_class = EmailOrUsernameTokenObtainPairSerializer
 
 
 class RegisterView(generics.CreateAPIView):
