@@ -77,12 +77,112 @@ def fetch_fred_events(days_ahead: int = 30) -> int:
 
 
 def fetch_market_news(max_results: int = 20) -> int:
-    """Fetch general market news from NewsAPI. Returns count of new articles."""
-    api_key = getattr(settings, "NEWS_API_KEY", "")
-    if not api_key:
-        logger.info("NEWS_API_KEY not set, skipping news fetch.")
-        return 0
+    """Fetch general market news.
 
+    Uses NewsAPI when NEWS_API_KEY is configured; otherwise falls back to the
+    keyless yfinance source so real headlines are always available (no empty
+    feed). Returns the count of new articles.
+    """
+    api_key = getattr(settings, "NEWS_API_KEY", "")
+    if api_key:
+        return _fetch_market_news_newsapi(max_results)
+    return fetch_market_news_yf(max_results)
+
+
+def fetch_market_news_yf(max_results: int = 20) -> int:
+    """Fetch general market news keylessly via yfinance (major indices/tickers).
+
+    yfinance needs no API key, so this guarantees the news feed is never empty.
+    """
+    from assets.models import Asset
+
+    # Aggregate news from a few liquid, widely-followed tickers so the feed
+    # always has a healthy stream of real, current headlines.
+    symbols = ["^GSPC", "^IXIC", "^DJI", "^VIX", "BTC-USD", "EURUSD=X"]
+    fallback_symbols = ["^GSPC", "^IXIC", "AAPL", "MSFT", "TSLA"]
+
+    count = 0
+    try:
+        for symbol in symbols:
+            try:
+                ticker = yf.Ticker(symbol)
+                items = ticker.news or []
+                for item in items:
+                    content = item.get("content", {}) or {}
+                    headline = content.get("title", "") or item.get("title", "")
+                    if not headline:
+                        continue
+
+                    pub_ts = content.get("pubDate") or item.get("providerPublishTime")
+                    pub_dt = timezone.now()
+                    if pub_ts:
+                        from django.utils.dateparse import parse_datetime
+                        parsed = parse_datetime(pub_ts)
+                        if parsed:
+                            pub_dt = parsed
+                        elif isinstance(pub_ts, (int, float)):
+                            pub_dt = timezone.datetime.fromtimestamp(pub_ts, tz=timezone.utc)
+
+                    MarketNews.objects.update_or_create(
+                        headline=headline,
+                        defaults={
+                            "summary": content.get("summary", "") or item.get("summary", ""),
+                            "source_name": "Yahoo Finance",
+                            "source_url": content.get("canonicalUrl", {}).get("url", "")
+                            if isinstance(content.get("canonicalUrl"), dict)
+                            else content.get("previewUrl", ""),
+                            "published_at": pub_dt,
+                        },
+                    )
+                    count += 1
+            except Exception as e:
+                logger.warning(f"yfinance market news failed for {symbol}: {e}")
+            if count >= max_results:
+                break
+    except Exception as e:
+        logger.warning(f"yfinance market news aggregate failed: {e}")
+
+    # If yfinance returned nothing for the primary set, try the stock list.
+    if count == 0:
+        for symbol in fallback_symbols:
+            try:
+                ticker = yf.Ticker(symbol)
+                items = ticker.news or []
+                for item in items:
+                    content = item.get("content", {}) or {}
+                    headline = content.get("title", "") or item.get("title", "")
+                    if not headline:
+                        continue
+                    today = timezone.localdate()
+                    pub_dt = timezone.now()
+                    from django.utils.dateparse import parse_datetime
+                    pub_ts = content.get("pubDate") or item.get("providerPublishTime")
+                    parsed = parse_datetime(pub_ts) if isinstance(pub_ts, str) else None
+                    if parsed:
+                        pub_dt = parsed
+                    elif isinstance(pub_ts, (int, float)):
+                        pub_dt = timezone.datetime.fromtimestamp(pub_ts, tz=timezone.utc)
+                    MarketNews.objects.update_or_create(
+                        headline=headline,
+                        defaults={
+                            "summary": content.get("summary", "") or item.get("summary", ""),
+                            "source_name": "Yahoo Finance",
+                            "source_url": "",
+                            "published_at": pub_dt,
+                        },
+                    )
+                    count += 1
+            except Exception as e:
+                logger.warning(f"yfinance fallback news failed for {symbol}: {e}")
+            if count >= max_results:
+                break
+
+    return count
+
+
+def _fetch_market_news_newsapi(max_results: int = 20) -> int:
+    """Fetch general market news from NewsAPI (requires NEWS_API_KEY)."""
+    api_key = getattr(settings, "NEWS_API_KEY", "")
     count = 0
     try:
         url = (
