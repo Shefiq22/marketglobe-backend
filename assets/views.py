@@ -1,4 +1,3 @@
-from django.db import models
 from django_filters import rest_framework as filters
 from rest_framework import generics, permissions
 from rest_framework.decorators import api_view, permission_classes
@@ -14,18 +13,10 @@ class AssetFilter(filters.FilterSet):
     asset_class = filters.CharFilter(field_name="asset_class", lookup_expr="exact")
     is_active = filters.BooleanFilter(field_name="is_active")
     is_delisted = filters.BooleanFilter(field_name="is_delisted")
-    search = filters.CharFilter(method="filter_search")
 
     class Meta:
         model = Asset
         fields = ["asset_class", "is_active", "is_delisted"]
-
-    def filter_search(self, queryset, name, value):
-        return queryset.filter(
-            models.Q(symbol__icontains=value)
-            | models.Q(name__icontains=value)
-            | models.Q(yfinance_symbol__icontains=value)
-        )
 
 
 class AssetListView(generics.ListCreateAPIView):
