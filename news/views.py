@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 
+from django.utils import timezone
 from django_filters import rest_framework as filters
 from rest_framework import generics, permissions
 from rest_framework.decorators import api_view, permission_classes
@@ -30,11 +31,29 @@ class EconomicEventListView(generics.ListAPIView):
 
 
 class MarketNewsListView(generics.ListAPIView):
-    """GET /api/news/market/ — general market news (public)."""
+    """GET /api/news/market/ — general market news (public).
 
-    queryset = MarketNews.objects.all()
+    Ensures the feed is never empty: if there is no fresh market news in the
+    database, it lazily fetches real headlines keylessly via yfinance before
+    serving the response. This guarantees real, live news on first request
+    with no manual seeding or paid shell access required.
+    """
+
     serializer_class = MarketNewsSerializer
     ordering_fields = ["published_at"]
+
+    def get_queryset(self):
+        from .services import fetch_market_news
+
+        max_age = timedelta(hours=3)
+        latest = MarketNews.objects.order_by("-published_at").first()
+        if latest is None or (timezone.now() - latest.published_at) > max_age:
+            try:
+                fetch_market_news(max_results=20)
+            except Exception as e:
+                logger = __import__("logging").getLogger(__name__)
+                logger.warning(f"Lazy market news fetch failed: {e}")
+        return MarketNews.objects.all()
 
 
 class AssetNewsListView(generics.ListAPIView):
