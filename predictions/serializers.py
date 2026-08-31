@@ -42,4 +42,11 @@ class ModelMetricSerializer(serializers.ModelSerializer):
     class Meta:
         model = ModelMetric
         fields = "__all__"
-        read_only_fields = fields
+        read_only_fields = [
+            "id",
+            "metric_name",
+            "metric_value",
+            "description",
+            "measured_at",
+            "created_at",
+        ]

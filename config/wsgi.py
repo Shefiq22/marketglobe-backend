@@ -43,4 +43,13 @@ try:
 except Exception:
     pass
 
+# Seed (or refresh) model performance metrics from the ML walk-forward
+# evaluation so /api/predictions/metrics/ always serves real numbers on the
+# deployed Postgres DB. Best-effort + idempotent (update_or_create), so it is
+# safe to run on every boot and never clobbers newer values.
+try:
+    call_command("seed_metrics", verbosity=0)
+except Exception:
+    pass
+
 application = get_wsgi_application()

@@ -1,8 +1,12 @@
 from django.db import models
 from django_filters import rest_framework as filters
 from rest_framework import generics, permissions
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
 
+from .candles import TIMEFRAMES, DEFAULT_TIMEFRAME, fetch_candles
 from .models import Asset
+from .prices import refresh_prices
 from .serializers import AssetCreateSerializer, AssetSerializer
 
 
@@ -61,3 +65,67 @@ class AssetDetailView(generics.RetrieveUpdateDestroyAPIView):
         if self.request.method in ("PUT", "PATCH", "DELETE"):
             return [permissions.IsAuthenticated()]
         return [permissions.AllowAny()]
+
+
+@api_view(["POST"])
+@permission_classes([permissions.IsAuthenticated])
+def refresh_prices_view(request):
+    """POST /api/assets/refresh-prices/ — pull live prices from yfinance (auth required).
+
+    Optional body: {"asset_id": id, "asset_class": "forex", "limit": n}
+    """
+    data = request.data or {}
+    asset_id = data.get("asset_id")
+    asset_class = data.get("asset_class")
+    limit = data.get("limit")
+
+    if asset_class not in (None, "stock", "forex", "crypto"):
+        return Response(
+            {"detail": "asset_class must be one of: stock, forex, crypto."},
+            status=400,
+        )
+
+    try:
+        result = refresh_prices(
+            asset_id=int(asset_id) if asset_id is not None else None,
+            asset_class=asset_class,
+            limit=limit,
+        )
+    except (TypeError, ValueError):
+        return Response({"detail": "Invalid parameters."}, status=400)
+    except Exception as e:  # pragma: no cover
+        return Response({"detail": f"Price refresh failed: {str(e)}"}, status=500)
+
+    return Response(result)
+
+
+@api_view(["GET"])
+@permission_classes([permissions.AllowAny])
+def asset_candles_view(request, pk):
+    """GET /api/assets/<id>/candles/?timeframe=1D — real OHLCV history (public).
+
+    Returns {symbol, timeframe, timeframes, candles: [...]}. The candles are
+    ordered oldest -> newest, each with ts/open/high/low/close/volume.
+    """
+    asset = Asset.objects.filter(id=pk, is_active=True, is_delisted=False).first()
+    if asset is None:
+        return Response({"detail": "Asset not found."}, status=404)
+
+    timeframe = request.query_params.get("timeframe", DEFAULT_TIMEFRAME)
+    if timeframe not in TIMEFRAMES:
+        return Response(
+            {"detail": f"timeframe must be one of: {', '.join(TIMEFRAMES)}."},
+            status=400,
+        )
+
+    candles = fetch_candles(asset.yfinance_symbol, timeframe)
+    return Response(
+        {
+            "symbol": asset.symbol,
+            "yfinance_symbol": asset.yfinance_symbol,
+            "timeframe": timeframe,
+            "last_price": asset.last_price,
+            "last_change_pct": asset.last_change_pct,
+            "candles": candles,
+        }
+    )

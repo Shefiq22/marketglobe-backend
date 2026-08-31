@@ -35,3 +35,19 @@ databases:
   - name: marketglobe-db
     plan: free
     databaseName: marketglobe
+
+# Scheduled price refresh (keeps /api/assets/ live). Free Render tiers sleep
+# when idle; this wakes the DB-backed data and keeps last_price current.
+jobs:
+  - name: marketglobe-price-refresh
+    plan: free
+    runtime: python
+    rootDir: backend
+    schedule: "*/15 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python manage.py refresh_prices
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marketglobe-db
+          property: connectionString
