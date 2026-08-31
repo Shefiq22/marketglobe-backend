@@ -12,12 +12,20 @@ import django
 
 django.setup()
 
+# Apply any pending schema migrations on boot so the deployed DB stays in sync
+# with model changes (no manual management needed after a deploy). Best-effort:
+# never block app startup.
+from django.core.management import call_command
+
+try:
+    call_command("migrate", verbosity=0, interactive=False)
+except Exception:
+    pass
+
 # In production (DEBUG=False) whitenoise serves static files from the
 # collected manifest. Ensure static files are collected on every boot so the
 # Django admin and Swagger UI work without a separate build step or manual
 # shell access. Best-effort: never block app startup on this.
-from django.core.management import call_command
-
 try:
     call_command("collectstatic", "--noinput", verbosity=0)
 except Exception:
