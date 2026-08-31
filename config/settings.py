@@ -138,3 +138,15 @@ CORS_ALLOW_CREDENTIALS = True
 # News API keys (optional)
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
+
+# Email / SMTP (optional). Set SMTP_HOST/EMAIL_HOST_USER/EMAIL_HOST_PASSWORD
+# (e.g. a free SendGrid or Mailgun SMTP relay) to enable real transactional
+# email such as password-reset links. Without these, the password-reset
+# endpoints still validate and return tokens for development, but do not send.
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("true", "1", "yes")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "MarketGlobe <no-reply@marketglobe.app>")
