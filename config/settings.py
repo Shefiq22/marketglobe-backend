@@ -139,14 +139,21 @@ CORS_ALLOW_CREDENTIALS = True
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 
-# Email / SMTP (optional). Set SMTP_HOST/EMAIL_HOST_USER/EMAIL_HOST_PASSWORD
-# (e.g. a free SendGrid or Mailgun SMTP relay) to enable real transactional
-# email such as password-reset links. Without these, the password-reset
-# endpoints still validate and return tokens for development, but do not send.
-EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+# Email / SMTP. Real transactional email (OTP codes, password reset) is sent
+# when EMAIL_HOST_USER/PASSWORD are configured (e.g. SendGrid/Mailgun relay).
+# Until then it falls back to the console backend so codes still work for
+# development and never break the app.
+_smtp_user = os.getenv("EMAIL_HOST_USER", "")
+_email_backend = os.getenv("EMAIL_BACKEND", "")
+if not _smtp_user:
+    # No SMTP credentials yet: codes go to the server log (console backend)
+    # so nothing breaks during development.
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+else:
+    EMAIL_BACKEND = _email_backend or "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = os.getenv("EMAIL_HOST", "")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
-EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_USER = _smtp_user
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("true", "1", "yes")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "MarketGlobe <no-reply@marketglobe.app>")
