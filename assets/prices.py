@@ -15,22 +15,38 @@ DEFAULT_LOOKBACK_DAYS = 5
 
 
 def fetch_live_price(ticker_symbol: str):
-    """Return (last_price, change_pct) or None if the ticker has no data."""
+    """Return (last_price, change_pct) or None if the ticker has no data.
+
+    Uses fast_info.lastPrice as the primary, up-to-date price and derives the
+    daily change from recent history on a best-effort basis. Falls back to
+    fast_info.lastPrice alone when history is unavailable/empty (e.g. some
+    crypto and forex tickers), so assets never show a stale null price.
+    """
     try:
         ticker = yf.Ticker(ticker_symbol)
         info = ticker.fast_info
-        if info is None or info.get("lastPrice", 0) == 0:
+        if info is None:
             return None
-        hist = ticker.history(period="5d")
-        if hist.empty:
+        last_price = info.get("lastPrice", 0)
+        if not last_price:
             return None
-        last_row = hist.iloc[-1]
-        price = float(last_row["Close"])
+
+        price = float(last_price)
         change_pct = 0.0
-        if len(hist) >= 2:
-            prev_close = float(hist.iloc[-2]["Close"])
-            if prev_close:
-                change_pct = ((price - prev_close) / prev_close) * 100
+        try:
+            hist = ticker.history(period="5d")
+            if not hist.empty:
+                last_row = hist.iloc[-1]
+                close = float(last_row["Close"])
+                if close:
+                    price = close
+                if len(hist) >= 2:
+                    prev_close = float(hist.iloc[-2]["Close"])
+                    if prev_close:
+                        change_pct = ((price - prev_close) / prev_close) * 100
+        except Exception as e:  # noqa: BLE001
+            logger.debug("History unavailable for %s, using fast_info price: %s", ticker_symbol, e)
+
         return price, change_pct
     except Exception as e:  # noqa: BLE001
         logger.warning("Price fetch failed for %s: %s", ticker_symbol, e)
