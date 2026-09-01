@@ -91,16 +91,18 @@ def _interpret_bb(bb_pct: float) -> str:
     return "Mid-range"
 
 
-def predict(ticker: str, model_path=_DEFAULT_MODEL, horizon=5, threshold=0.005):
+def predict(ticker: str, model_path=_DEFAULT_MODEL, horizon=5, threshold=0.01):
     if isinstance(horizon, str):
         horizon = HORIZON_DAYS.get(horizon, 5)
 
     artifact = joblib.load(model_path)
-    model, feature_columns = artifact["model"], artifact["feature_columns"]
+    model = artifact["model"]
+    # Use the exact feature subset the model was trained on.
+    selected = artifact.get("selected_features") or artifact["feature_columns"]
 
     df = load_live(ticker, start="2023-01-01")
     X, _, _, full_df = build_feature_set(df, horizon=horizon, threshold=threshold)
-    X = X.reindex(columns=feature_columns)
+    X = X.reindex(columns=selected)
 
     latest_row = X.iloc[[-1]]
     prob_up = float(model.predict_proba(latest_row)[0][1])
