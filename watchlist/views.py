@@ -73,8 +73,8 @@ class WatchlistAddAssetView(APIView):
 
         if not created:
             return Response(
-                {"detail": "Asset already in this watchlist."},
-                status=400,
+                WatchlistItemSerializer(item).data,
+                status=status.HTTP_200_OK,
             )
 
         return Response(

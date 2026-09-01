@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import OtpCode
+from .models import OtpCode, UserSettings
 from .serializers import (
     ChangePasswordSerializer,
     EmailOrUsernameTokenObtainPairSerializer,
@@ -17,6 +17,7 @@ from .serializers import (
     RequestOtpSerializer,
     ResetPasswordSerializer,
     UserSerializer,
+    UserSettingsSerializer,
     VerifyOtpSerializer,
 )
 
@@ -61,6 +62,23 @@ class MeView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+
+
+class UserSettingsView(generics.RetrieveUpdateAPIView):
+    """GET/PATCH /api/auth/settings/
+
+    Read and update the signed-in user's app preferences (theme, currency,
+    notifications/biometric/two-factor switches). The settings row is
+    auto-created with the account, but we call get_or_create defensively for
+    any pre-existing accounts.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = UserSettingsSerializer
+
+    def get_object(self):
+        settings, _ = UserSettings.objects.get_or_create(user=self.request.user)
+        return settings
 
 
 class ChangePasswordView(APIView):

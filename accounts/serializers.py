@@ -3,6 +3,8 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+from .models import UserSettings
+
 User = get_user_model()
 
 
@@ -102,3 +104,33 @@ class VerifyOtpSerializer(serializers.Serializer):
 
     email = serializers.EmailField()
     code = serializers.CharField()
+
+
+class UserSettingsSerializer(serializers.ModelSerializer):
+    """Read/write user preferences for the Settings screen.
+
+    Fields mirror the frontend toggles: theme (dark/light/system), display
+    currency, and the notifications / biometric / two-factor switches.
+    """
+
+    class Meta:
+        model = UserSettings
+        fields = [
+            "theme",
+            "currency",
+            "notifications_enabled",
+            "biometric_enabled",
+            "two_factor_enabled",
+            "updated_at",
+        ]
+        read_only_fields = ["updated_at"]
+
+    def validate_theme(self, value):
+        if value not in ("dark", "light", "system"):
+            raise serializers.ValidationError("theme must be dark, light, or system.")
+        return value
+
+    def validate_currency(self, value):
+        if value not in ("USD", "EUR"):
+            raise serializers.ValidationError("currency must be USD or EUR.")
+        return value
