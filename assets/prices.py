@@ -1,6 +1,7 @@
 """Live price utilities shared by the refresh endpoint and management command."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 import yfinance as yf
@@ -117,21 +118,27 @@ def fetch_quotes(assets) -> dict:
 
     Fetching a live quote for every asset on every list render is expensive, so
     this is exposed as a dedicated endpoint the app calls to overlay fresh
-    prices on top of the (possibly cached) asset list. For each asset we return:
+    prices on top of the (possibly cached) asset list. Upstream calls run in
+    parallel so a full asset list resolves in a couple of seconds. For each
+    asset we return:
 
         {id: {"price": float, "change_pct": float|None}}
 
     Assets that fail to quote (or that are not active) are omitted, so the
     consumer can fall back to the stored snapshot price for those.
     """
-    quotes = {}
-    for asset in assets:
-        if not asset.is_active or asset.is_delisted:
-            continue
-        price, change_pct = _quote(asset)
-        if price is not None:
-            quotes[asset.pk] = {"price": price, "change_pct": change_pct}
-    return quotes
+    active = [a for a in assets if a.is_active and not a.is_delisted]
+    if not active:
+        return {}
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=12, thread_name_prefix="quote") as pool:
+        futures = {pool.submit(_quote, asset): asset for asset in active}
+        for future, asset in futures.items():
+            price, change_pct = future.result()
+            if price is not None:
+                results[asset.pk] = {"price": price, "change_pct": change_pct}
+    return results
 
 
 def _quote(asset: Asset):
