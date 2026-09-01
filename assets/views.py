@@ -129,8 +129,9 @@ def asset_quotes_view(request):
 
     Body: {"ids": [1,2,3]} (optional; empty -> all active assets).
     Returns {id: {"price": ..., "change_pct": ...}} for each asset priced.
-    Crypto is quoted from Binance; stocks/forex from yfinance. This endpoint
-    exists so the app never has to display a stale snapshot price.
+    Crypto is quoted from CoinGecko (batched); stocks/forex from yfinance.
+    Responses are served from a short-lived cache and every active asset gets a
+    price + change_pct (stored snapshot fallback) so the app never shows blanks.
     """
     ids = (request.data or {}).get("ids") or []
     try:

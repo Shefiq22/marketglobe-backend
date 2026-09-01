@@ -1,33 +1,60 @@
-"""Live price utilities shared by the refresh endpoint and management command."""
+"""Live price utilities shared by the refresh endpoint and management command.
+
+Price sources, chosen for what actually works on Render's datacenter IPs:
+
+* Crypto  -> CoinGecko (one batched request covers all coins, includes 24h %).
+* Stock / forex -> yfinance ``download`` (uses Yahoo's crumb-free chart
+  endpoint) in small multi-ticker batches.
+
+A 60-second in-memory cache backs ``fetch_quotes`` so the app's 4s polling never
+hammers upstreams — upstreams are hit at most ~5 times per minute. Every asset
+gets a value: if an upstream fetch fails we fall back to the stored snapshot so
+a price and a percentage always reach the app.
+"""
 
 import logging
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
+import pandas as pd
 import yfinance as yf
-from django.utils import timezone
 
+from . import coingecko
 from .binance import fetch_live_price as _binance_live_price
 from .models import Asset, PriceSnapshot
 
 logger = logging.getLogger(__name__)
 
-# Fallback, in case a filter returns nothing to refresh.
 DEFAULT_LOOKBACK_DAYS = 5
+
+# How long the in-memory quote cache stays fresh before the next upstream round.
+QUOTE_CACHE_TTL_SECONDS = 60
+# Max tickers per yfinance download call (keeps each call fast and friendly).
+MAX_STOCK_BATCH = 25
+
+_quote_cache = {"ts": 0.0, "data": {}}
+_cache_lock = threading.Lock()
 
 
 def fetch_live_price(ticker_symbol, asset_class=None):
     """Return (last_price, change_pct) or None if the ticker has no data.
 
-    Crypto assets are sourced from Binance (real-time spot prices). Stock and
-    forex assets keep using yfinance. Falls back to yfinance for crypto when
-    Binance has no data for the ticker.
+    Crypto is sourced from CoinGecko (real-time spot, 24h change); stock and
+    forex assets use yfinance. Binance stays as a crypto fallback for locations
+    where it is not geo-blocked.
     """
     if asset_class == "crypto":
+        quote = coingecko.fetch_quotes([ticker_symbol]).get(ticker_symbol)
+        if quote and quote.get("price"):
+            return quote["price"], quote.get("change_pct") or 0.0
         binance_snapshot = _binance_live_price(ticker_symbol)
         if binance_snapshot is not None:
             return binance_snapshot
-        logger.debug("Binance had no data for %s; falling back to yfinance.", ticker_symbol)
+        logger.debug(
+            "CoinGecko/Binance had no data for %s; falling back to yfinance.", ticker_symbol
+        )
 
     try:
         ticker = yf.Ticker(ticker_symbol)
@@ -52,7 +79,9 @@ def fetch_live_price(ticker_symbol, asset_class=None):
                     if prev_close:
                         change_pct = ((price - prev_close) / prev_close) * 100
         except Exception as e:  # noqa: BLE001
-            logger.debug("History unavailable for %s, using fast_info price: %s", ticker_symbol, e)
+            logger.debug(
+                "History unavailable for %s, using fast_info price: %s", ticker_symbol, e
+            )
 
         return price, change_pct
     except Exception as e:  # noqa: BLE001
@@ -114,41 +143,140 @@ def refresh_prices(asset_id=None, asset_class=None, limit=None):
 
 
 def fetch_quotes(assets) -> dict:
-    """Return accurate live quotes for the given assets keyed by asset id.
+    """Return accurate live quotes for the given assets keyed by asset id:
+        {id: {"price": float, "change_pct": float}}
 
-    Fetching a live quote for every asset on every list render is expensive, so
-    this is exposed as a dedicated endpoint the app calls to overlay fresh
-    prices on top of the (possibly cached) asset list. Upstream calls run in
-    parallel so a full asset list resolves in a couple of seconds. For each
-    asset we return:
-
-        {id: {"price": float, "change_pct": float|None}}
-
-    Assets that fail to quote (or that are not active) are omitted, so the
-    consumer can fall back to the stored snapshot price for those.
+    Quotes are served from a 60s in-memory cache. Refreshes batch upstream calls
+    (crypto = 1 CoinGecko request; stocks/forex = small yfinance batches), and
+    every active asset is included — falling back to its stored snapshot when an
+    upstream fetch fails — so the app always has a price and a percentage.
     """
     active = [a for a in assets if a.is_active and not a.is_delisted]
     if not active:
         return {}
 
-    results = {}
-    with ThreadPoolExecutor(max_workers=12, thread_name_prefix="quote") as pool:
-        futures = {pool.submit(_quote, asset): asset for asset in active}
-        for future, asset in futures.items():
-            price, change_pct = future.result()
-            if price is not None:
-                results[asset.pk] = {"price": price, "change_pct": change_pct}
-    return results
+    with _cache_lock:
+        if time.time() - _quote_cache["ts"] > QUOTE_CACHE_TTL_SECONDS:
+            try:
+                _refresh_quote_cache(active)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Quote cache refresh failed: %s", e)
+        data = _quote_cache["data"]
+        return {a.pk: data[a.pk] for a in active if a.pk in data}
 
 
-def _quote(asset: Asset):
-    """Best-effort live quote for a single asset; returns (price, change_pct)
-    or (None, None). Crypto uses Binance; stocks/forex use yfinance fast_info."""
+def _refresh_quote_cache(active):
+    # Mark the cache fresh *before* fetching so concurrent pollers use the
+    # previous data instead of triggering another upstream round.
+    _quote_cache["ts"] = time.time()
+    fresh = _bulk_quotes(active)
+    if fresh:
+        merged = dict(_quote_cache["data"])
+        merged.update(fresh)
+        _quote_cache["data"] = merged
+
+
+def _bulk_quotes(active):
+    result = {}
+    crypto = [a for a in active if a.asset_class == "crypto"]
+    others = [a for a in active if a.asset_class != "crypto"]
+
+    if crypto:
+        quotes = coingecko.fetch_quotes([a.yfinance_symbol for a in crypto])
+        for asset in crypto:
+            quote = quotes.get(asset.yfinance_symbol)
+            if quote:
+                result[asset.pk] = _round_quote(quote)
+            else:
+                _stored_fallback(result, asset)
+
+    if others:
+        batches = [others[i : i + MAX_STOCK_BATCH] for i in range(0, len(others), MAX_STOCK_BATCH)]
+        with ThreadPoolExecutor(
+            max_workers=min(6, len(batches)), thread_name_prefix="quote"
+        ) as pool:
+            futures = {pool.submit(_fetch_stock_batch, batch): batch for batch in batches}
+            for future, batch in futures.items():
+                try:
+                    batch_quotes = future.result(timeout=45)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Stock quote batch failed: %s", e)
+                    batch_quotes = {}
+                for asset in batch:
+                    quote = batch_quotes.get(asset.yfinance_symbol)
+                    if quote:
+                        result[asset.pk] = _round_quote(quote)
+                    else:
+                        _stored_fallback(result, asset)
+
+    return result
+
+
+def _fetch_stock_batch(assets):
+    """Fetch (price, change_pct) for a small batch of stock/forex assets with a
+    single yfinance ``download`` (uses Yahoo's crumb-free chart endpoint)."""
+    tickers = [a.yfinance_symbol for a in assets]
+    out = {}
     try:
-        snapshot = fetch_live_price(asset.yfinance_symbol, asset.asset_class)
+        frame = yf.download(
+            " ".join(tickers),
+            period="5d",
+            interval="1d",
+            group_by="ticker",
+            threads=False,
+            progress=False,
+            auto_adjust=False,
+        )
     except Exception as e:  # noqa: BLE001
-        logger.warning("Quote fetch failed for %s: %s", asset.symbol, e)
-        return None, None
-    if snapshot is None:
-        return None, None
-    return snapshot
+        logger.warning("yfinance download failed for %s: %s", tickers[:3], e)
+        return out
+
+    if frame is None or frame.empty:
+        return out
+
+    multi = isinstance(frame.columns, pd.MultiIndex)
+    for asset in assets:
+        try:
+            if multi:
+                close = frame[asset.yfinance_symbol]["Close"]
+            else:
+                close = frame["Close"]
+        except Exception:  # noqa: BLE001
+            continue
+        close = close.dropna()
+        if close.empty:
+            continue
+        last = float(close.iloc[-1])
+        prev = float(close.iloc[-2]) if len(close) >= 2 else last
+        change = ((last - prev) / prev * 100) if prev else 0.0
+        out[asset.yfinance_symbol] = {"price": last, "change_pct": change}
+    return out
+
+
+def _stored_fallback(result, asset):
+    """Fall back to the stored snapshot so a price always reaches the app."""
+    try:
+        price = float(asset.last_price)
+    except (TypeError, ValueError):
+        price = None
+    if not price:
+        return
+    try:
+        change = float(asset.last_change_pct) if asset.last_change_pct is not None else 0.0
+    except (TypeError, ValueError):
+        change = 0.0
+    result[asset.pk] = {"price": round(price, 6), "change_pct": round(change, 4)}
+
+
+def _round_quote(quote):
+    price = quote.get("price")
+    change = quote.get("change_pct")
+    try:
+        price = round(float(price), 6)
+    except (TypeError, ValueError):
+        return quote
+    try:
+        change = round(float(change), 4)
+    except (TypeError, ValueError):
+        change = 0.0
+    return {"price": price, "change_pct": change}

@@ -1,10 +1,16 @@
-"""Fetch real OHLCV candle history from yfinance for the charting feature."""
+"""Fetch real OHLCV candle history for the charting feature.
+
+Stock and forex candles come from yfinance. Crypto candles come from CoinGecko
+(Binance is geo-blocked on Render's datacenter IPs, so it only remains as a
+fallback), which keeps the chart consistent with the CoinGecko live price.
+"""
 
 import logging
 
 import yfinance as yf
 
 from .binance import fetch_candles as _binance_candles
+from . import coingecko
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +38,17 @@ def fetch_candles(ticker_symbol: str, timeframe: str = DEFAULT_TIMEFRAME, asset_
     {"ts": iso8601, "open":..., "high":..., "low":..., "close":..., "volume":...}
     Ordered oldest -> newest.
 
-    Crypto assets use Binance klines so the chart matches the live Binance
-    price. Stock and forex assets use yfinance history.
+    Crypto assets use CoinGecko history (Binance fallback) so the chart matches
+    the live CoinGecko price. Stock and forex assets use yfinance history.
     """
     if timeframe not in TIMEFRAMES:
         timeframe = DEFAULT_TIMEFRAME
     interval, period, max_bars = TIMEFRAMES[timeframe]
 
     if asset_class == "crypto":
+        candles = coingecko.fetch_candles(ticker_symbol, timeframe, max_bars)
+        if candles:
+            return candles
         return _binance_candles(ticker_symbol, timeframe, max_bars)
 
     try:
