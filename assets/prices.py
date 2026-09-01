@@ -6,6 +6,7 @@ from datetime import date
 import yfinance as yf
 from django.utils import timezone
 
+from .binance import fetch_live_price as _binance_live_price
 from .models import Asset, PriceSnapshot
 
 logger = logging.getLogger(__name__)
@@ -14,14 +15,19 @@ logger = logging.getLogger(__name__)
 DEFAULT_LOOKBACK_DAYS = 5
 
 
-def fetch_live_price(ticker_symbol: str):
+def fetch_live_price(ticker_symbol, asset_class=None):
     """Return (last_price, change_pct) or None if the ticker has no data.
 
-    Uses fast_info.lastPrice as the primary, up-to-date price and derives the
-    daily change from recent history on a best-effort basis. Falls back to
-    fast_info.lastPrice alone when history is unavailable/empty (e.g. some
-    crypto and forex tickers), so assets never show a stale null price.
+    Crypto assets are sourced from Binance (real-time spot prices). Stock and
+    forex assets keep using yfinance. Falls back to yfinance for crypto when
+    Binance has no data for the ticker.
     """
+    if asset_class == "crypto":
+        binance_snapshot = _binance_live_price(ticker_symbol)
+        if binance_snapshot is not None:
+            return binance_snapshot
+        logger.debug("Binance had no data for %s; falling back to yfinance.", ticker_symbol)
+
     try:
         ticker = yf.Ticker(ticker_symbol)
         info = ticker.fast_info
@@ -55,7 +61,7 @@ def fetch_live_price(ticker_symbol: str):
 
 def refresh_asset_price(asset: Asset) -> bool:
     """Fetch a single asset's live price and persist it. Returns True on success."""
-    snapshot = fetch_live_price(asset.yfinance_symbol)
+    snapshot = fetch_live_price(asset.yfinance_symbol, asset.asset_class)
     if snapshot is None:
         return False
 
@@ -104,3 +110,38 @@ def refresh_prices(asset_id=None, asset_class=None, limit=None):
             failed += 1
 
     return {"total": len(asset_ids), "success": success, "failed": failed}
+
+
+def fetch_quotes(assets) -> dict:
+    """Return accurate live quotes for the given assets keyed by asset id.
+
+    Fetching a live quote for every asset on every list render is expensive, so
+    this is exposed as a dedicated endpoint the app calls to overlay fresh
+    prices on top of the (possibly cached) asset list. For each asset we return:
+
+        {id: {"price": float, "change_pct": float|None}}
+
+    Assets that fail to quote (or that are not active) are omitted, so the
+    consumer can fall back to the stored snapshot price for those.
+    """
+    quotes = {}
+    for asset in assets:
+        if not asset.is_active or asset.is_delisted:
+            continue
+        price, change_pct = _quote(asset)
+        if price is not None:
+            quotes[asset.pk] = {"price": price, "change_pct": change_pct}
+    return quotes
+
+
+def _quote(asset: Asset):
+    """Best-effort live quote for a single asset; returns (price, change_pct)
+    or (None, None). Crypto uses Binance; stocks/forex use yfinance fast_info."""
+    try:
+        snapshot = fetch_live_price(asset.yfinance_symbol, asset.asset_class)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Quote fetch failed for %s: %s", asset.symbol, e)
+        return None, None
+    if snapshot is None:
+        return None, None
+    return snapshot

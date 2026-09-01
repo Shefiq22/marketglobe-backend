@@ -1,12 +1,8 @@
 import hashlib
-import os
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.tokens import PasswordResetTokenGenerator
-from django.core.mail import send_mail, BadHeaderError
+from django.core.mail import send_mail
 from django.utils import timezone
-from django.utils.encoding import force_bytes
-from django.utils.http import urlsafe_base64_encode
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -19,14 +15,12 @@ from .serializers import (
     EmailOrUsernameTokenObtainPairSerializer,
     RegisterSerializer,
     RequestOtpSerializer,
-    RequestPasswordResetSerializer,
     ResetPasswordSerializer,
     UserSerializer,
     VerifyOtpSerializer,
 )
 
 User = get_user_model()
-password_reset_token = PasswordResetTokenGenerator()
 
 
 class EmailOrUsernameTokenObtainPairView(TokenObtainPairView):
@@ -82,51 +76,11 @@ class ChangePasswordView(APIView):
         return Response({"detail": "Password updated successfully."})
 
 
-class RequestPasswordResetView(APIView):
-    """POST /api/auth/request-password-reset/
-
-    Accepts an email address. If the address belongs to an account, a
-    password-reset token is generated and emailed. Always returns success (even
-    for unknown emails) to avoid leaking which addresses are registered.
-    """
-
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        serializer = RequestPasswordResetSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        email = serializer.validated_data["email"].strip().lower()
-
-        user = User.objects.filter(email__iexact=email).first()
-        if user is not None:
-            token = password_reset_token.make_token(user)
-            uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
-            frontend_url = os.getenv("FRONTEND_URL", "https://marketglobe-web.onrender.com")
-            reset_url = f"{frontend_url}/reset-password?uidb64={uidb64}&token={token}"
-            try:
-                send_mail(
-                    subject="Reset your MarketGlobe password",
-                    message=(
-                        f"Hi {user.username or user.email},\n\n"
-                        f"Use this link to set a new password (it expires soon):\n{reset_url}\n\n"
-                        "If you didn't request this, you can safely ignore this email."
-                    ),
-                    from_email=None,
-                    recipient_list=[user.email],
-                    fail_silently=False,
-                )
-            except (BadHeaderError, Exception):
-                # Email sending is best-effort; never fail the API call for it.
-                pass
-
-        return Response({"detail": "If that email is registered, a reset link has been sent."})
-
-
 class ResetPasswordView(APIView):
     """POST /api/auth/reset-password/
 
-    Validates the emailed token and sets a new password. Body:
-    {email, token, new_password}
+    Validates an emailed one-time password-reset code and sets a new password.
+    Body: {email, code, new_password}
     """
 
     permission_classes = [permissions.AllowAny]
@@ -136,17 +90,30 @@ class ResetPasswordView(APIView):
         serializer.is_valid(raise_exception=True)
 
         email = serializer.validated_data["email"].strip().lower()
+        code = serializer.validated_data["code"].strip()
         user = User.objects.filter(email__iexact=email).first()
-        token = serializer.validated_data["token"]
 
-        if user is None or not password_reset_token.check_token(user, token):
+        if user is None:
             return Response(
-                {"detail": "This reset link is invalid or has expired."},
+                {"detail": "Invalid or expired code."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        otp = (
+            OtpCode.objects.filter(user=user, purpose="password_reset", used=False)
+            .order_by("-created_at")
+            .first()
+        )
+        if otp is None or not otp.is_valid() or otp.code_hash != _hash_code(code):
+            return Response(
+                {"detail": "Invalid or expired code."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        otp.used = True
+        otp.save(update_fields=["used"])
         user.set_password(serializer.validated_data["new_password"])
-        user.save()
+        user.save(update_fields=["password"])
         return Response({"detail": "Password reset successfully. You can now sign in."})
 
 
@@ -176,26 +143,39 @@ class RequestOtpView(APIView):
         serializer = RequestOtpSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data["email"].strip().lower()
+        purpose = serializer.validated_data.get("purpose", "email_verify")
 
         user = User.objects.filter(email__iexact=email).first()
         if user is not None:
             code = OtpCode.generate_code()
-            OtpCode.objects.filter(user=user, purpose="email_verify", used=False).update(used=True)
+            OtpCode.objects.filter(user=user, purpose=purpose, used=False).update(used=True)
             OtpCode.objects.create(
                 user=user,
                 code_hash=_hash_code(code),
-                purpose="email_verify",
+                purpose=purpose,
                 expires_at=timezone.now() + timezone.timedelta(minutes=10),
             )
+            if purpose == "password_reset":
+                subject = "Your MarketGlobe password reset code"
+                message = (
+                    f"Hi {user.username or user.email},\n\n"
+                    f"Your password-reset code is: {code}\n\n"
+                    "Enter it in the app to set a new password. It expires in "
+                    "10 minutes. If you didn't request this, you can safely "
+                    "ignore this email."
+                )
+            else:
+                subject = "Your MarketGlobe verification code"
+                message = (
+                    f"Hi {user.username or user.email},\n\n"
+                    f"Your verification code is: {code}\n\n"
+                    "It expires in 10 minutes. If you didn't request this, "
+                    "you can safely ignore this email."
+                )
             try:
                 send_mail(
-                    subject="Your MarketGlobe verification code",
-                    message=(
-                        f"Hi {user.username or user.email},\n\n"
-                        f"Your verification code is: {code}\n\n"
-                        "It expires in 10 minutes. If you didn't request this, "
-                        "you can safely ignore this email."
-                    ),
+                    subject=subject,
+                    message=message,
                     from_email=None,
                     recipient_list=[user.email],
                     fail_silently=False,

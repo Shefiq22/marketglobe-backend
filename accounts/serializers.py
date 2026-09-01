@@ -1,6 +1,5 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
-from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
@@ -76,28 +75,26 @@ class ChangePasswordSerializer(serializers.Serializer):
         return value
 
 
-class RequestPasswordResetSerializer(serializers.Serializer):
-    """Email address to send a password-reset link to."""
-
-    email = serializers.EmailField()
-
-
 class ResetPasswordSerializer(serializers.Serializer):
-    """Validate a reset token and set a new password.
+    """Validate a password-reset OTP and set a new password.
 
-    The actual user + token check happens in the view (it needs DB + generator
-    access), so this only validates the new password strength.
+    The actual user + code check happens in the view (it needs DB access), so
+    this only validates the new password strength.
     """
 
     email = serializers.EmailField()
-    token = serializers.CharField(write_only=True)
+    code = serializers.CharField(write_only=True)
     new_password = serializers.CharField(write_only=True, validators=[validate_password])
 
 
 class RequestOtpSerializer(serializers.Serializer):
-    """Email address to send a one-time verification code to."""
+    """Email address (and optional purpose) to send a one-time code to."""
 
     email = serializers.EmailField()
+    purpose = serializers.ChoiceField(
+        choices=[("email_verify", "email_verify"), ("password_reset", "password_reset")],
+        required=False,
+    )
 
 
 class VerifyOtpSerializer(serializers.Serializer):

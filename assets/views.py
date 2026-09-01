@@ -5,7 +5,7 @@ from rest_framework.response import Response
 
 from .candles import TIMEFRAMES, DEFAULT_TIMEFRAME, fetch_candles
 from .models import Asset
-from .prices import refresh_prices
+from .prices import refresh_prices, fetch_quotes
 from .serializers import AssetCreateSerializer, AssetSerializer
 
 
@@ -109,7 +109,7 @@ def asset_candles_view(request, pk):
             status=400,
         )
 
-    candles = fetch_candles(asset.yfinance_symbol, timeframe)
+    candles = fetch_candles(asset.yfinance_symbol, timeframe, asset.asset_class)
     return Response(
         {
             "symbol": asset.symbol,
@@ -120,3 +120,29 @@ def asset_candles_view(request, pk):
             "candles": candles,
         }
     )
+
+
+@api_view(["POST"])
+@permission_classes([permissions.AllowAny])
+def asset_quotes_view(request):
+    """POST /api/assets/quotes/ — accurate live prices for a set of assets.
+
+    Body: {"ids": [1,2,3]} (optional; empty -> all active assets).
+    Returns {id: {"price": ..., "change_pct": ...}} for each asset priced.
+    Crypto is quoted from Binance; stocks/forex from yfinance. This endpoint
+    exists so the app never has to display a stale snapshot price.
+    """
+    ids = (request.data or {}).get("ids") or []
+    try:
+        ids = [int(i) for i in ids]
+    except (TypeError, ValueError):
+        return Response({"detail": "ids must be a list of integers."}, status=400)
+
+    queryset = Asset.objects.filter(is_active=True)
+    if ids:
+        queryset = queryset.filter(id__in=ids)
+
+    # Cap the number of simultaneous upstream requests per call.
+    assets = list(queryset[:200])
+    quotes = fetch_quotes(assets)
+    return Response(quotes)

@@ -4,6 +4,8 @@ import logging
 
 import yfinance as yf
 
+from .binance import fetch_candles as _binance_candles
+
 logger = logging.getLogger(__name__)
 
 # TradingView-style timeframes -> (yfinance interval, lookback period, max bars)
@@ -25,14 +27,20 @@ TIMEFRAMES = {
 DEFAULT_TIMEFRAME = "1D"
 
 
-def fetch_candles(ticker_symbol: str, timeframe: str = DEFAULT_TIMEFRAME) -> list:
+def fetch_candles(ticker_symbol: str, timeframe: str = DEFAULT_TIMEFRAME, asset_class=None) -> list:
     """Return a list of candle dicts:
     {"ts": iso8601, "open":..., "high":..., "low":..., "close":..., "volume":...}
     Ordered oldest -> newest.
+
+    Crypto assets use Binance klines so the chart matches the live Binance
+    price. Stock and forex assets use yfinance history.
     """
     if timeframe not in TIMEFRAMES:
         timeframe = DEFAULT_TIMEFRAME
     interval, period, max_bars = TIMEFRAMES[timeframe]
+
+    if asset_class == "crypto":
+        return _binance_candles(ticker_symbol, timeframe, max_bars)
 
     try:
         df = yf.Ticker(ticker_symbol).history(period=period, interval=interval, auto_adjust=True)
