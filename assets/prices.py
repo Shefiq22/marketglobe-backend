@@ -2,9 +2,10 @@
 
 Price sources, chosen for what actually works on Render's datacenter IPs:
 
-* Crypto  -> CoinGecko (one batched request covers all coins, includes 24h %).
-* Stock / forex -> yfinance ``download`` (uses Yahoo's crumb-free chart
-  endpoint) in small multi-ticker batches.
+* All markets — stock, forex AND crypto — quote from yfinance ``download``
+  (Yahoo's crumb-free chart endpoint) in small multi-ticker batches, so
+  crypto (BTC-USD etc.) reports from the same source as stocks.
+* Crypto that Yahoo cannot price falls back to CoinGecko, then Binance.
 
 A 20-second in-memory cache backs ``fetch_quotes`` so the app's 4s polling keeps
 prices visibly moving without hammering upstreams. Every asset
@@ -41,21 +42,11 @@ _cache_lock = threading.Lock()
 def fetch_live_price(ticker_symbol, asset_class=None):
     """Return (last_price, change_pct) or None if the ticker has no data.
 
-    Crypto is sourced from CoinGecko (real-time spot, 24h change); stock and
-    forex assets use yfinance. Binance stays as a crypto fallback for locations
-    where it is not geo-blocked.
+    Stock, forex AND crypto all quote from yfinance — crypto tickers are
+    mapped to their Yahoo pairs (e.g. BTC-USD) — so every market reports the
+    same consistent source. Crypto falls back to CoinGecko, then Binance, only
+    when Yahoo has no data for the ticker.
     """
-    if asset_class == "crypto":
-        quote = coingecko.fetch_quotes([ticker_symbol]).get(ticker_symbol)
-        if quote and quote.get("price"):
-            return quote["price"], quote.get("change_pct") or 0.0
-        binance_snapshot = _binance_live_price(ticker_symbol)
-        if binance_snapshot is not None:
-            return binance_snapshot
-        logger.debug(
-            "CoinGecko/Binance had no data for %s; falling back to yfinance.", ticker_symbol
-        )
-
     try:
         ticker = yf.Ticker(ticker_symbol)
         info = ticker.fast_info
@@ -85,8 +76,19 @@ def fetch_live_price(ticker_symbol, asset_class=None):
 
         return price, change_pct
     except Exception as e:  # noqa: BLE001
-        logger.warning("Price fetch failed for %s: %s", ticker_symbol, e)
-        return None
+        logger.debug("Yahoo price fetch failed for %s: %s", ticker_symbol, e)
+
+    if asset_class == "crypto":
+        quote = coingecko.fetch_quotes([ticker_symbol]).get(ticker_symbol)
+        if quote and quote.get("price"):
+            return quote["price"], quote.get("change_pct") or 0.0
+        binance_snapshot = _binance_live_price(ticker_symbol)
+        if binance_snapshot is not None:
+            return binance_snapshot
+        logger.debug(
+            "CoinGecko/Binance had no data for %s either.", ticker_symbol
+        )
+    return None
 
 
 def refresh_asset_price(asset: Asset) -> bool:
@@ -177,44 +179,60 @@ def _refresh_quote_cache(active):
 
 
 def _bulk_quotes(active):
-    result = {}
-    crypto = [a for a in active if a.asset_class == "crypto"]
-    others = [a for a in active if a.asset_class != "crypto"]
+    """Quote every asset — stocks, forex AND crypto — from one source:
 
-    if crypto:
-        quotes = coingecko.fetch_quotes([a.yfinance_symbol for a in crypto])
-        for asset in crypto:
+    yfinance batches (crypto tickers are Yahoo pairs like BTC-USD), so prices
+    and change percentages are consistent across all markets. Crypto assets
+    Yahoo cannot price fall back to CoinGecko, then the stored snapshot, so a
+    value always reaches the app.
+    """
+    result = {}
+    missing = []
+
+    batches = [active[i : i + MAX_STOCK_BATCH] for i in range(0, len(active), MAX_STOCK_BATCH)]
+    with ThreadPoolExecutor(
+        max_workers=min(6, len(batches)), thread_name_prefix="quote"
+    ) as pool:
+        futures = {pool.submit(_fetch_yf_batch, batch): batch for batch in batches}
+        for future, batch in futures.items():
+            try:
+                batch_quotes = future.result(timeout=45)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Quote batch failed: %s", e)
+                batch_quotes = {}
+            for asset in batch:
+                quote = batch_quotes.get(asset.yfinance_symbol)
+                if quote:
+                    result[asset.pk] = _round_quote(quote)
+                else:
+                    missing.append(asset)
+
+    crypto_missing = [a for a in missing if a.asset_class == "crypto"]
+    if crypto_missing:
+        try:
+            quotes = coingecko.fetch_quotes([a.yfinance_symbol for a in crypto_missing])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("CoinGecko fallback failed: %s", e)
+            quotes = {}
+        for asset in crypto_missing:
             quote = quotes.get(asset.yfinance_symbol)
             if quote:
                 result[asset.pk] = _round_quote(quote)
-            else:
-                _stored_fallback(result, asset)
+                continue
+            _stored_fallback(result, asset)
 
-    if others:
-        batches = [others[i : i + MAX_STOCK_BATCH] for i in range(0, len(others), MAX_STOCK_BATCH)]
-        with ThreadPoolExecutor(
-            max_workers=min(6, len(batches)), thread_name_prefix="quote"
-        ) as pool:
-            futures = {pool.submit(_fetch_stock_batch, batch): batch for batch in batches}
-            for future, batch in futures.items():
-                try:
-                    batch_quotes = future.result(timeout=45)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("Stock quote batch failed: %s", e)
-                    batch_quotes = {}
-                for asset in batch:
-                    quote = batch_quotes.get(asset.yfinance_symbol)
-                    if quote:
-                        result[asset.pk] = _round_quote(quote)
-                    else:
-                        _stored_fallback(result, asset)
+    for asset in missing:
+        if asset.pk in result or asset.asset_class == "crypto":
+            continue
+        _stored_fallback(result, asset)
 
     return result
 
 
-def _fetch_stock_batch(assets):
-    """Fetch (price, change_pct) for a small batch of stock/forex assets with a
-    single yfinance ``download`` (uses Yahoo's crumb-free chart endpoint)."""
+def _fetch_yf_batch(assets):
+    """Fetch (price, change_pct) for a batch of stock/forex/crypto assets with a
+    single yfinance ``download`` (uses Yahoo's crumb-free chart endpoint). Crypto
+    symbols are already Yahoo pairs (BTC-USD) so they price in this same batch."""
     tickers = [a.yfinance_symbol for a in assets]
     out = {}
     try:
