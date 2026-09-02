@@ -1,3 +1,4 @@
+from django.db import IntegrityError
 from rest_framework import generics, permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -33,6 +34,18 @@ class WatchlistListView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        existing = self.get_queryset().first()
+        if existing is not None:
+            return Response(WatchlistSerializer(existing).data, status=status.HTTP_200_OK)
+        try:
+            return super().create(request, *args, **kwargs)
+        except IntegrityError:
+            existing = self.get_queryset().first()
+            if existing is not None:
+                return Response(WatchlistSerializer(existing).data, status=status.HTTP_200_OK)
+            raise
 
 
 class WatchlistDetailView(generics.RetrieveUpdateDestroyAPIView):
