@@ -1,4 +1,6 @@
 import hashlib
+import logging
+import time
 
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
@@ -20,6 +22,13 @@ from .serializers import (
     UserSettingsSerializer,
     VerifyOtpSerializer,
 )
+
+logger = logging.getLogger(__name__)
+
+# OTP abuse protection: a sender waits at least OTP_COOLDOWN_SECONDS between
+# codes and at most OTP_HOURLY_LIMIT codes per hour (per account + purpose).
+OTP_COOLDOWN_SECONDS = 60
+OTP_HOURLY_LIMIT = 5
 
 User = get_user_model()
 
@@ -147,12 +156,28 @@ def _issue_tokens(user):
     }
 
 
+def _send_with_retry(subject, message, recipient):
+    """SMTP can transiently fail; retry with a small backoff before giving up."""
+    last_exc = None
+    for attempt in range(3):
+        try:
+            send_mail(subject, message, None, [recipient], fail_silently=False)
+            return True
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("email send attempt %s/3 failed: %s", attempt + 1, exc)
+            time.sleep(1)
+    logger.error("email permanently failed for %s: %s", recipient, last_exc)
+    return False
+
+
 class RequestOtpView(APIView):
     """POST /api/auth/request-otp/ — email a one-time verification code.
 
     Body: {email}. Always returns success to avoid leaking which emails exist.
     When an account matches, a 6-digit code is emailed (or logged to console in
-    development where SMTP is not configured).
+    development where SMTP is not configured). Cooldown/hourly limits prevent
+    OTP-bombing an inbox.
     """
 
     permission_classes = [permissions.AllowAny]
@@ -165,13 +190,27 @@ class RequestOtpView(APIView):
 
         user = User.objects.filter(email__iexact=email).first()
         if user is not None:
+            recent = OtpCode.objects.filter(user=user, purpose=purpose)
+            now = timezone.now()
+
+            if recent.filter(created_at__gte=now - timezone.timedelta(seconds=OTP_COOLDOWN_SECONDS)).exists():
+                return Response(
+                    {"detail": "A code was sent recently. Please wait a moment before requesting another."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+            if recent.filter(created_at__gte=now - timezone.timedelta(hours=1)).count() >= OTP_HOURLY_LIMIT:
+                return Response(
+                    {"detail": "Too many codes requested. Please wait an hour and try again."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+
             code = OtpCode.generate_code()
             OtpCode.objects.filter(user=user, purpose=purpose, used=False).update(used=True)
             OtpCode.objects.create(
                 user=user,
                 code_hash=_hash_code(code),
                 purpose=purpose,
-                expires_at=timezone.now() + timezone.timedelta(minutes=10),
+                expires_at=now + timezone.timedelta(minutes=10),
             )
             if purpose == "password_reset":
                 subject = "Your MarketGlobe password reset code"
@@ -190,17 +229,7 @@ class RequestOtpView(APIView):
                     "It expires in 10 minutes. If you didn't request this, "
                     "you can safely ignore this email."
                 )
-            try:
-                send_mail(
-                    subject=subject,
-                    message=message,
-                    from_email=None,
-                    recipient_list=[user.email],
-                    fail_silently=False,
-                )
-            except Exception:
-                # Email is best-effort; never fail the API call for it.
-                pass
+            _send_with_retry(subject, message, user.email)
 
         return Response({"detail": "If that email is registered, a code has been sent."})
 

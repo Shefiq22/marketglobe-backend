@@ -1,8 +1,12 @@
 import re
 
+from django.contrib.auth import get_user_model
 from django.core import mail
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework import status
+
+from accounts.models import OtpCode
 
 
 @override_settings(
@@ -96,3 +100,37 @@ class OtpAuthFlowTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(login.status_code, status.HTTP_200_OK)
+
+    def test_request_otp_cooldown(self):
+        self._register()
+        first = self.client.post(
+            "/api/auth/request-otp/",
+            {"email": "otpflow@example.com"},
+            content_type="application/json",
+        )
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        second = self.client.post(
+            "/api/auth/request-otp/",
+            {"email": "otpflow@example.com"},
+            content_type="application/json",
+        )
+        self.assertEqual(second.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_request_otp_hourly_limit(self):
+        self._register()
+        user = get_user_model().objects.get(email="otpflow@example.com")
+        now = timezone.now()
+        for _ in range(5):
+            OtpCode.objects.create(
+                user=user,
+                code_hash="x" * 64,
+                purpose="email_verify",
+                created_at=now - timezone.timedelta(minutes=1),
+                expires_at=now + timezone.timedelta(minutes=9),
+            )
+        blocked = self.client.post(
+            "/api/auth/request-otp/",
+            {"email": "otpflow@example.com"},
+            content_type="application/json",
+        )
+        self.assertEqual(blocked.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
