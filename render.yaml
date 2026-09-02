@@ -23,26 +23,38 @@ services:
           property: connectionString
       - key: CORS_ALLOWED_ORIGINS
         value: https://marketglobe-web.onrender.com
-      # Email / SMTP for OTP + password-reset emails via Gmail SMTP.
-      # In Render dashboard → Environment set:
-      #   EMAIL_HOST_USER     = your Gmail address (e.g. you@gmail.com)
-      #   EMAIL_HOST_PASSWORD = the 16-char Gmail App Password (NOT your
-      #                         regular password; see google.com/app-passwords)
-      # Codes fall back to the server log until those are set.
+      # Email / SMTP for OTP + password-reset emails. Provider-agnostic: config comes
+# from env vars so you can switch providers without code changes.
+#
+# Recommended: Brevo (ex-Sendinblue) - free 300 emails/day, signup works in most
+# regions. Steps:
+#   1. app.brevo.com -> Sign up.
+#   2. SMTP & API -> generate an SMTP key. SMTP login is shown there too
+#      (e.g. an email address like "marketglobe@smtp-relay.brevo.com").
+#   3. Senders -> add + verify your "from" address (confirmation email; no
+#      domain ownership needed).
+#   4. In Render dashboard -> Environment set:
+#        EMAIL_HOST_USER     = Brevo SMTP login
+#        EMAIL_HOST_PASSWORD = Brevo SMTP key
+#        DEFAULT_FROM_EMAIL  = your verified "from" address
+#
+# Gmail fallback (fine for casual use, NOT for scale - Google caps ~500/day):
+#   EMAIL_HOST_USER=you@gmail.com, EMAIL_HOST_PASSWORD=<App Password>,
+#   DEFAULT_FROM_EMAIL=you@gmail.com
+#
+# If EMAIL_HOST_USER is blank, codes print to the server log (console backend).
       - key: EMAIL_BACKEND
         value: django.core.mail.backends.smtp.EmailBackend
       - key: EMAIL_HOST
-        value: smtp.gmail.com
+        value: smtp-relay.brevo.com
       - key: EMAIL_PORT
         value: "587"
       - key: EMAIL_HOST_USER
         sync: false
       - key: EMAIL_HOST_PASSWORD
         sync: false
-      - key: EMAIL_USE_TLS
-        value: "True"
       - key: DEFAULT_FROM_EMAIL
-        value: MarketGlobe <no-reply@marketglobe.app>
+        sync: false
       # Admin superuser auto-created at startup from these (log into /admin/
       # with them). Fill in the values in the Render dashboard.
       - key: DJANGO_SUPERUSER_USERNAME
