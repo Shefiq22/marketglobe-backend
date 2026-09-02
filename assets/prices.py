@@ -6,8 +6,8 @@ Price sources, chosen for what actually works on Render's datacenter IPs:
 * Stock / forex -> yfinance ``download`` (uses Yahoo's crumb-free chart
   endpoint) in small multi-ticker batches.
 
-A 60-second in-memory cache backs ``fetch_quotes`` so the app's 4s polling never
-hammers upstreams — upstreams are hit at most ~5 times per minute. Every asset
+A 20-second in-memory cache backs ``fetch_quotes`` so the app's 4s polling keeps
+prices visibly moving without hammering upstreams. Every asset
 gets a value: if an upstream fetch fails we fall back to the stored snapshot so
 a price and a percentage always reach the app.
 """
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_LOOKBACK_DAYS = 5
 
 # How long the in-memory quote cache stays fresh before the next upstream round.
-QUOTE_CACHE_TTL_SECONDS = 60
+QUOTE_CACHE_TTL_SECONDS = 20
 # Max tickers per yfinance download call (keeps each call fast and friendly).
 MAX_STOCK_BATCH = 25
 
@@ -146,7 +146,7 @@ def fetch_quotes(assets) -> dict:
     """Return accurate live quotes for the given assets keyed by asset id:
         {id: {"price": float, "change_pct": float}}
 
-    Quotes are served from a 60s in-memory cache. Refreshes batch upstream calls
+    Quotes are served from a 20s in-memory cache. Refreshes batch upstream calls
     (crypto = 1 CoinGecko request; stocks/forex = small yfinance batches), and
     every active asset is included — falling back to its stored snapshot when an
     upstream fetch fails — so the app always has a price and a percentage.
