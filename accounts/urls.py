@@ -13,4 +13,9 @@ urlpatterns = [
     path("reset-password/", views.ResetPasswordView.as_view(), name="reset_password"),
     path("request-otp/", views.RequestOtpView.as_view(), name="request_otp"),
     path("verify-otp/", views.VerifyOtpView.as_view(), name="verify_otp"),
+    path("google/", views.GoogleLoginView.as_view(), name="google_login"),
+    path("2fa/setup/", views.TwoFactorSetupView.as_view(), name="two_factor_setup"),
+    path("2fa/verify/", views.TwoFactorVerifyView.as_view(), name="two_factor_verify"),
+    path("2fa/disable/", views.TwoFactorDisableView.as_view(), name="two_factor_disable"),
+    path("2fa/login/", views.TwoFactorLoginView.as_view(), name="two_factor_login"),
 ]

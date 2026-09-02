@@ -7,6 +7,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from .models import AssetNews, EconomicEvent, MarketNews
+from .sentiment import extract_related_symbols, score_sentiment
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +52,13 @@ def fetch_fred_events(days_ahead: int = 30) -> int:
             resp.raise_for_status()
             data = resp.json()
 
-            observations = data.get("observations", [])
-            for obs in observations:
-                if obs.get("value") == ".":
-                    continue
-
+            observations = [
+                o for o in data.get("observations", []) if o.get("value") != "."
+            ]
+            # Observations come back sorted descending; iterate chronologically so
+            # each row's previous_value is the prior period's actual.
+            previous_actual = ""
+            for obs in sorted(observations, key=lambda o: o["date"]):
                 obs_date = date.fromisoformat(obs["date"])
                 EconomicEvent.objects.update_or_create(
                     title=title,
@@ -64,10 +67,12 @@ def fetch_fred_events(days_ahead: int = 30) -> int:
                         "category": series_id,
                         "importance": importance,
                         "actual_value": obs.get("value", ""),
+                        "previous_value": previous_actual,
                         "source": "FRED",
                         "source_url": f"https://fred.stlouisfed.org/series/{series_id}",
                     },
                 )
+                previous_actual = obs.get("value", "")
                 count += 1
 
         except Exception as e:
@@ -130,6 +135,8 @@ def fetch_market_news_yf(max_results: int = 20) -> int:
                     if not headline:
                         continue
 
+                    sentiment_text = f"{headline} {content.get('summary') or item.get('summary', '')}"
+
                     pub_ts = content.get("pubDate") or item.get("providerPublishTime")
                     pub_dt = timezone.now()
                     if pub_ts:
@@ -149,6 +156,8 @@ def fetch_market_news_yf(max_results: int = 20) -> int:
                             if isinstance(content.get("canonicalUrl"), dict)
                             else content.get("previewUrl", ""),
                             "image_url": _thumbnail_url(content),
+                            "sentiment": score_sentiment(sentiment_text)["label"],
+                            "related_symbols": extract_related_symbols(headline),
                             "published_at": pub_dt,
                         },
                     )
@@ -187,6 +196,8 @@ def fetch_market_news_yf(max_results: int = 20) -> int:
                             "source_name": "Yahoo Finance",
                             "source_url": "",
                             "image_url": _thumbnail_url(content),
+                            "sentiment": score_sentiment(headline)["label"],
+                            "related_symbols": extract_related_symbols(headline),
                             "published_at": pub_dt,
                         },
                     )
@@ -233,6 +244,8 @@ def _fetch_market_news_newsapi(max_results: int = 20) -> int:
                     "source_name": article.get("source", {}).get("name", ""),
                     "source_url": article.get("url", ""),
                     "image_url": article.get("urlToImage", ""),
+                    "sentiment": score_sentiment(f"{article['title']} {article.get('description', '')}")["label"],
+                    "related_symbols": extract_related_symbols(article["title"]),
                     "published_at": pub_dt or timezone.now(),
                 },
             )
@@ -279,6 +292,7 @@ def fetch_asset_news(symbol: str, max_results: int = 10) -> int:
                     "summary": item.get("summary", ""),
                     "source_name": item.get("publisher", ""),
                     "source_url": item.get("link", ""),
+                    "sentiment": score_sentiment(f"{title} {item.get('summary', '')}")["label"],
                     "published_at": pub_dt,
                 },
             )

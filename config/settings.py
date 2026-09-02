@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "news",
     "watchlist",
     "notifications",
+    "alerts",
 ]
 
 MIDDLEWARE = [
@@ -139,6 +140,13 @@ CORS_ALLOW_CREDENTIALS = True
 # News API keys (optional)
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
+
+# Comma-separated list of Google OAuth client IDs that may mint ID tokens for
+# this app (Android app client + web client). Leave empty to skip the audience
+# check (accept any verified token) — set it once the Flutter Firebase/Google
+# config is wired up.
+_google_clients = os.getenv("GOOGLE_OAUTH_CLIENT_IDS", "")
+GOOGLE_OAUTH_CLIENT_IDS = [c.strip() for c in _google_clients.split(",") if c.strip()]
 
 # Email / SMTP for OTP + password reset. When EMAIL_HOST_USER is set the SMTP
 # backend is used (e.g. SendGrid with user "apikey" + API key password).

@@ -33,4 +33,5 @@ urlpatterns = [
     path("api/news/", include("news.urls")),
     path("api/watchlist/", include("watchlist.urls")),
     path("api/notifications/", include("notifications.urls")),
+    path("api/alerts/", include("alerts.urls")),
 ]

@@ -193,6 +193,7 @@ def predict(ticker: str, model_path=_DEFAULT_MODEL, horizon=5, threshold=0.01):
         "call": ("UP" if prob_up > 0.5 else "DOWN") if has_signal else "NO CLEAR SIGNAL",
         "confidence": round(prob_up if prob_up > 0.5 else 1 - prob_up, 4),
         "indicators": indicators,
+        "features_used": selected,
         "summary": "\n".join(summary_parts),
     }
 

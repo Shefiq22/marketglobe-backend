@@ -125,6 +125,7 @@ class Command(BaseCommand):
                                 "last_close": result.get("last_close"),
                                 "as_of_date": result.get("as_of_date"),
                                 "indicators": result.get("indicators", {}),
+                                "features_used": result.get("features_used", []),
                                 "summary": result.get("summary", ""),
                             },
                         )

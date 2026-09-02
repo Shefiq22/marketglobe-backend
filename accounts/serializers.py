@@ -11,16 +11,20 @@ User = get_user_model()
 class EmailOrUsernameTokenObtainPairSerializer(TokenObtainPairSerializer):
     """Login with either the username OR the email address.
 
-    SimpleJWT's default validates against `username` only. The Pulse Markets
-    frontend labels the login field "Email", so we resolve the entered value to
-    a user by username or email before issuing tokens.
+    Resolves the entered value to a user by username or email, validates the
+    password, and exposes the matching user via ``self.user`` (populated in
+    ``validate``). Token issuance happens in the view so two-factor-auth can be
+    enforced between validation and token creation.
     """
 
+    two_factor_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
     def validate(self, attrs):
+        self.user = None
+
         identifier = attrs.get("username", "")
         password = attrs.get("password", "")
 
-        user = None
         if User.objects.filter(email__iexact=identifier).exists():
             user = User.objects.filter(email__iexact=identifier).first()
         else:
@@ -37,8 +41,8 @@ class EmailOrUsernameTokenObtainPairSerializer(TokenObtainPairSerializer):
         if not user.is_active:
             raise serializers.ValidationError("This account is inactive.")
 
-        data = super().validate({"username": user.username, "password": password})
-        return data
+        self.user = user
+        return attrs
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -104,6 +108,32 @@ class VerifyOtpSerializer(serializers.Serializer):
 
     email = serializers.EmailField()
     code = serializers.CharField()
+
+
+class GoogleLoginSerializer(serializers.Serializer):
+    """Accept a Google ID token and (optionally) profile info.
+
+    The token is verified against Google's tokeninfo endpoint in the view; the
+    verification payload's email is trusted as the account identity.
+    """
+
+    id_token = serializers.CharField()
+    email = serializers.EmailField(required=False, allow_blank=True)
+    first_name = serializers.CharField(required=False, allow_blank=True)
+    last_name = serializers.CharField(required=False, allow_blank=True)
+
+
+class TwoFactorCodeSerializer(serializers.Serializer):
+    """A TOTP code supplied by an authenticator app."""
+
+    code = serializers.CharField(max_length=10)
+
+
+class TwoFactorLoginSerializer(serializers.Serializer):
+    """Email + TOTP code, used to complete a 2FA-protected login."""
+
+    email = serializers.EmailField()
+    code = serializers.CharField(max_length=10)
 
 
 class UserSettingsSerializer(serializers.ModelSerializer):

@@ -51,6 +51,9 @@ class UserSettings(models.Model):
     product_updates = models.BooleanField(default=False)
     biometric_enabled = models.BooleanField(default=False)
     two_factor_enabled = models.BooleanField(default=False)
+    # TOTP secret (base32) for authenticator-app 2FA. Generated on setup; empty
+    # until the user completes enrollment. Never returned by serializers.
+    totp_secret = models.CharField(max_length=64, blank=True, default="")
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
