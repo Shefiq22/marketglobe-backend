@@ -36,10 +36,10 @@ class EmailOrUsernameTokenObtainPairSerializer(TokenObtainPairSerializer):
             )
         if not user.check_password(password):
             raise serializers.ValidationError(
-                "Unable to log in with provided credentials."
+                "The password you entered is incorrect."
             )
         if not user.is_active:
-            raise serializers.ValidationError("This account is inactive.")
+            raise serializers.ValidationError("This account is disabled.")
 
         self.user = user
         return attrs
