@@ -1,5 +1,8 @@
+from unittest import mock
+
 from django.test import TestCase
 
+from . import services
 from .sentiment import extract_related_symbols, score_sentiment
 from assets.models import Asset
 
@@ -47,3 +50,48 @@ class ExtractRelatedSymbolsTests(TestCase):
         asset = Asset.objects.get(yfinance_symbol="AAPL")
         symbols = extract_related_symbols("Apple announces new quarter results")
         self.assertNotIn("AAPL", symbols)
+
+
+class XoomarEventTests(TestCase):
+    def test_as_text(self):
+        self.assertEqual(services._as_text(None), "")
+        self.assertEqual(services._as_text("2.1%"), "2.1%")
+        self.assertEqual(services._as_text("205K"), "205K")
+
+    @mock.patch.object(services, "requests")
+    def test_fetch_parses_and_upserts(self, mock_req):
+        mock_req.get.return_value.raise_for_status.return_value = None
+        mock_req.get.return_value.json.return_value = {
+            "data": [
+                {
+                    "eventName": "Nonfarm Payrolls (Employment Situation)",
+                    "scheduledAt": "2026-09-04T12:30:00.000Z",
+                    "importance": "high",
+                    "previous": "205K",
+                    "actual": "210K",
+                    "forecast": None,
+                },
+                {
+                    "eventName": "FOMC Rate Decision",
+                    "scheduledAt": "2026-09-17",
+                    "importance": "HIGH",
+                    "actual": None,
+                },
+            ]
+        }
+
+        count = services.fetch_xoomar_events()
+
+        self.assertEqual(count, 2)
+        from .models import EconomicEvent
+
+        nfp = EconomicEvent.objects.get(title="Nonfarm Payrolls (Employment Situation)")
+        self.assertEqual(nfp.currency, "USD")
+        self.assertEqual(nfp.importance, "high")
+        self.assertEqual(nfp.actual_value, "210K")
+        self.assertEqual(nfp.previous_value, "205K")
+        self.assertEqual(nfp.forecast_value, "")
+        self.assertEqual(nfp.source, "XOOMAR")
+
+        fomc = EconomicEvent.objects.get(title="FOMC Rate Decision")
+        self.assertEqual(fomc.importance, "high")

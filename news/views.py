@@ -79,6 +79,7 @@ def refresh_news(request):
             {
                 "detail": "News refreshed.",
                 "fred_events_fetched": result["fred_events"],
+                "xoomar_events_fetched": result["xoomar_events"],
                 "market_news_fetched": result["market_news"],
             }
         )

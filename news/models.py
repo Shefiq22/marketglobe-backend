@@ -13,6 +13,7 @@ class EconomicEvent(models.Model):
     title = models.CharField(max_length=300)
     description = models.TextField(blank=True, default="")
     category = models.CharField(max_length=100, blank=True, default="")
+    currency = models.CharField(max_length=10, blank=True, default="")
     importance = models.CharField(max_length=10, choices=IMPORTANCE_CHOICES, default="medium")
     event_date = models.DateField(db_index=True)
     actual_value = models.CharField(max_length=100, blank=True, default="")

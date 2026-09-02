@@ -22,7 +22,12 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from news.services import fetch_asset_news, fetch_fred_events, fetch_market_news
+        from news.services import (
+            fetch_asset_news,
+            fetch_fred_events,
+            fetch_market_news,
+            fetch_xoomar_events,
+        )
 
         max_news = options["max_news"]
 
@@ -34,6 +39,9 @@ class Command(BaseCommand):
 
         fred = fetch_fred_events()
         self.stdout.write(self.style.SUCCESS(f"Economic events fetched: {fred}"))
+
+        xoomar = fetch_xoomar_events()
+        self.stdout.write(self.style.SUCCESS(f"Xoomar economic events fetched: {xoomar}"))
 
         # Fetch per-asset news for a handful of the most relevant assets.
         from assets.models import Asset

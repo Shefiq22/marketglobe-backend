@@ -98,6 +98,75 @@ def _thumbnail_url(content) -> str:
         return ""
 
 
+def fetch_xoomar_events(days_ahead: int = 30) -> int:
+    """Fetch US macro events from the keyless Xoomar Pulse calendar.
+
+    Sourced from BLS/Fed/BEA (CPI, Nonfarm Payrolls, FOMC, GDP, etc.), no key
+    or auth needed. Provides actual + previous (values come ready to display);
+    forecast is intentionally absent because the free official sources do not
+    publish consensus estimates. Returns count of events upserted.
+    """
+    start_date = date.today() - timedelta(days=7)
+    end_date = date.today() + timedelta(days=days_ahead)
+
+    count = 0
+    try:
+        url = (
+            "https://xoomar.com/api/markets/calendar"
+            f"?from={start_date.isoformat()}"
+            f"&to={end_date.isoformat()}"
+        )
+        resp = requests.get(
+            url,
+            timeout=15,
+            headers={"Accept": "application/json", "User-Agent": "marketglobe-app/1.0"},
+        )
+        resp.raise_for_status()
+        entries = (resp.json() or {}).get("data", []) or []
+
+        for entry in entries:
+            event = entry.get("eventName") or ""
+            scheduled = entry.get("scheduledAt") or ""
+            if not event or not scheduled:
+                continue
+
+            try:
+                parsed_date = date.fromisoformat(scheduled[:10])
+            except ValueError:
+                continue
+
+            impact = (entry.get("importance") or "").strip().lower()
+            if impact not in ("high", "medium", "low"):
+                impact = "medium"
+
+            EconomicEvent.objects.update_or_create(
+                title=event,
+                event_date=parsed_date,
+                defaults={
+                    "category": "economic",
+                    "currency": "USD",
+                    "importance": impact,
+                    "actual_value": _as_text(entry.get("actual")),
+                    "forecast_value": _as_text(entry.get("forecast")),
+                    "previous_value": _as_text(entry.get("previous")),
+                    "source": "XOOMAR",
+                    "source_url": "https://xoomar.com/markets",
+                },
+            )
+            count += 1
+    except Exception as e:
+        logger.warning(f"Xoomar economic calendar fetch failed: {e}")
+
+    return count
+
+
+def _as_text(value) -> str:
+    """Return a display-ready string for a value (already formatted upstream)."""
+    if value is None or value == "":
+        return ""
+    return str(value)
+
+
 def fetch_market_news(max_results: int = 20) -> int:
     """Fetch general market news.
 
@@ -308,5 +377,6 @@ def refresh_all_news() -> dict:
     """Run all news fetchers. Returns summary dict."""
     return {
         "fred_events": fetch_fred_events(),
+        "xoomar_events": fetch_xoomar_events(),
         "market_news": fetch_market_news(),
     }

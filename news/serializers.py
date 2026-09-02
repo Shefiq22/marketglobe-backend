@@ -11,6 +11,7 @@ class EconomicEventSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "category",
+            "currency",
             "importance",
             "event_date",
             "actual_value",
