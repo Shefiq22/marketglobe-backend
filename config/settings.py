@@ -139,15 +139,13 @@ CORS_ALLOW_CREDENTIALS = True
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 
-# Email / SMTP. Real transactional email (OTP codes, password reset) is sent
-# when EMAIL_HOST_USER/PASSWORD are configured (e.g. SendGrid/Mailgun relay).
-# Until then it falls back to the console backend so codes still work for
-# development and never break the app.
+# Email / SMTP for OTP + password reset. When EMAIL_HOST_USER is set the SMTP
+# backend is used (e.g. SendGrid with user "apikey" + API key password).
 _smtp_user = os.getenv("EMAIL_HOST_USER", "")
 _email_backend = os.getenv("EMAIL_BACKEND", "")
+
 if not _smtp_user:
-    # No SMTP credentials yet: codes go to the server log (console backend)
-    # so nothing breaks during development.
+    # No SMTP account configured: codes print to the server log only.
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 else:
     EMAIL_BACKEND = _email_backend or "django.core.mail.backends.smtp.EmailBackend"
