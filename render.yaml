@@ -5,6 +5,7 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput
+    releaseCommand: python manage.py migrate --noinput
     startCommand: gunicorn config.wsgi:application --timeout 180 --workers 2
     healthCheckPath: /health/
     envVars:
