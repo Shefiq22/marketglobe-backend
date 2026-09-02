@@ -76,6 +76,23 @@ def fetch_fred_events(days_ahead: int = 30) -> int:
     return count
 
 
+def _thumbnail_url(content) -> str:
+    """Pull the largest image URL from yfinance's content.thumbnail payload."""
+    try:
+        content = content or {}
+        thumbnail = content.get("thumbnail") or {}
+        resolutions = thumbnail.get("resolutions") or []
+        if not resolutions:
+            return ""
+        best = resolutions[-1]
+        for res in reversed(resolutions):
+            if int(res.get("width") or 0) > int(best.get("width") or 0):
+                best = res
+        return best.get("url") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def fetch_market_news(max_results: int = 20) -> int:
     """Fetch general market news.
 
@@ -131,6 +148,7 @@ def fetch_market_news_yf(max_results: int = 20) -> int:
                             "source_url": content.get("canonicalUrl", {}).get("url", "")
                             if isinstance(content.get("canonicalUrl"), dict)
                             else content.get("previewUrl", ""),
+                            "image_url": _thumbnail_url(content),
                             "published_at": pub_dt,
                         },
                     )
@@ -168,6 +186,7 @@ def fetch_market_news_yf(max_results: int = 20) -> int:
                             "summary": content.get("summary", "") or item.get("summary", ""),
                             "source_name": "Yahoo Finance",
                             "source_url": "",
+                            "image_url": _thumbnail_url(content),
                             "published_at": pub_dt,
                         },
                     )
@@ -213,6 +232,7 @@ def _fetch_market_news_newsapi(max_results: int = 20) -> int:
                     "summary": article.get("description", ""),
                     "source_name": article.get("source", {}).get("name", ""),
                     "source_url": article.get("url", ""),
+                    "image_url": article.get("urlToImage", ""),
                     "published_at": pub_dt or timezone.now(),
                 },
             )

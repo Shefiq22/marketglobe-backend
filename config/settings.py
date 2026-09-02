@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "predictions",
     "news",
     "watchlist",
+    "notifications",
 ]
 
 MIDDLEWARE = [

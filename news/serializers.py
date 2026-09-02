@@ -32,6 +32,7 @@ class MarketNewsSerializer(serializers.ModelSerializer):
             "summary",
             "source_name",
             "source_url",
+            "image_url",
             "related_symbols",
             "sentiment",
             "published_at",

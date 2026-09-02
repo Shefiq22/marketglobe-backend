@@ -37,6 +37,7 @@ class MarketNews(models.Model):
     summary = models.TextField(blank=True, default="")
     source_name = models.CharField(max_length=200, blank=True, default="")
     source_url = models.URLField(blank=True, default="")
+    image_url = models.URLField(blank=True, default="")
     related_symbols = models.JSONField(default=list, blank=True)
     sentiment = models.CharField(
         max_length=20,

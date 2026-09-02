@@ -32,4 +32,5 @@ urlpatterns = [
     path("api/predictions/", include("predictions.urls")),
     path("api/news/", include("news.urls")),
     path("api/watchlist/", include("watchlist.urls")),
+    path("api/notifications/", include("notifications.urls")),
 ]
