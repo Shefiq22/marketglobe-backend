@@ -23,18 +23,20 @@ services:
           property: connectionString
       - key: CORS_ALLOWED_ORIGINS
         value: https://marketglobe-web.onrender.com
-      # Email / SMTP for OTP + password-reset emails via SendGrid.
-      # The ONLY secret needed is EMAIL_HOST_PASSWORD (the SendGrid API key):
-      # paste it in Render dashboard → Environment → EMAIL_HOST_PASSWORD and
-      # Render redeploys. Codes went to the server log until that is set.
+      # Email / SMTP for OTP + password-reset emails via Gmail SMTP.
+      # In Render dashboard → Environment set:
+      #   EMAIL_HOST_USER     = your Gmail address (e.g. you@gmail.com)
+      #   EMAIL_HOST_PASSWORD = the 16-char Gmail App Password (NOT your
+      #                         regular password; see google.com/app-passwords)
+      # Codes fall back to the server log until those are set.
       - key: EMAIL_BACKEND
         value: django.core.mail.backends.smtp.EmailBackend
       - key: EMAIL_HOST
-        value: smtp.sendgrid.net
+        value: smtp.gmail.com
       - key: EMAIL_PORT
         value: "587"
       - key: EMAIL_HOST_USER
-        value: apikey
+        sync: false
       - key: EMAIL_HOST_PASSWORD
         sync: false
       - key: EMAIL_USE_TLS
