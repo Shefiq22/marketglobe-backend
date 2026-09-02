@@ -22,12 +22,26 @@ class EconomicEventFilter(filters.FilterSet):
 
 
 class EconomicEventListView(generics.ListAPIView):
-    """GET /api/news/events/ — economic calendar events (public)."""
+    """GET /api/news/events/ — economic calendar events (public).
 
-    queryset = EconomicEvent.objects.all()
+    Lazily fetches the keyless Xoomar calendar when no events are stored yet,
+    so the calendar fills on first request without manual seeding.
+    """
+
     serializer_class = EconomicEventSerializer
     filterset_class = EconomicEventFilter
     ordering_fields = ["event_date", "importance"]
+
+    def get_queryset(self):
+        from .services import fetch_xoomar_events
+
+        if not EconomicEvent.objects.filter(source="XOOMAR").exists():
+            try:
+                fetch_xoomar_events()
+            except Exception as e:
+                logger = __import__("logging").getLogger(__name__)
+                logger.warning(f"Lazy Xoomar event fetch failed: {e}")
+        return EconomicEvent.objects.all()
 
 
 class MarketNewsListView(generics.ListAPIView):
